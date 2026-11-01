@@ -42,65 +42,102 @@ Two things worth knowing before you pick numbers:
   a **miss**.
 
 ---
-## 1.
 
-<!-- Your criterion. It must name a number. -->
+## 1. False Positives
 
-
-
-**Why this target:**
-
-
-
----
-
-## 2.
-
-<!-- Your criterion. -->
-
-
+Of 10 pieces of writing I know were written by a human, **at most 3 are labelled
+high-confidence AI**, and this holds in **each of the 3 trials** (e.g. 2, 3, 1
+passes; 2, 4, 1 is a miss). A human piece labelled "unsure" does not count as a
+false positive.
 
 **Why this target:**
 
-
+Being accused of using AI when you didn't is serious at worst and annoying at
+best, so a false positive costs a writer far more than a missed detection costs
+the site. That is why I want this well under half (5 in 10). I didn't go as low
+as 1 or 2 in 10 because the model signal is noisy from run to run, and a target
+that strict would force thresholds so cautious that almost no AI text ever gets
+flagged. Three in ten is the most wrong accusations I'm willing to accept while
+the system still does its job; the "unsure" label exists to catch the borderline
+cases so they don't become accusations.
 
 ---
 
-## 3.
+## 2. Score Spread
 
-<!-- Your criterion. -->
-
-
+Using 5 pieces that are clearly AI-written and 5 that are clearly human-written,
+the **average combined score of the AI pieces is at least 0.50 higher than the
+average combined score of the human pieces**, in each of the 3 trials.
 
 **Why this target:**
 
-
+Combined scores run from 0.0 (confidently human) to 1.0 (confidently AI), with
+0.5 in the middle. I'd consider a score around 0.25 solidly human and around 0.75
+solidly AI, which is a gap of 0.50. If clearly-different texts can't get that far
+apart, the signals aren't separating human from AI writing well enough for the
+labels to mean anything, and small run-to-run noise would push pieces across the
+thresholds.
 
 ---
 
-## 4.
+## 3. Label Coverage
 
-<!-- Your criterion. -->
-
-
+Across a test set of 10 pieces (a mix of human, AI, and mixed or edited writing),
+**each of the three labels (high-confidence human, unsure, high-confidence AI)
+appears at least once**, in each of the 3 trials.
 
 **Why this target:**
 
-
+A label that can never be produced is a gap in the design, not a feature. I
+especially want "unsure" to be reachable: it is the middle ground that lets the
+system point out possible AI use without jumping to a false accusation that
+could have serious consequences for the writer. Checking this on every trial
+makes sure a label isn't only reachable on a lucky run.
 
 ---
 
-## 5.
+## 4. The Appeal Path
 
-<!-- Your criterion. -->
-
-
+**Every appeal (10 out of 10) on a real `content_id`** returns a confirmation,
+changes that item's status to `under_review`, and adds an appeal entry to the
+log, while the original decision entry stays unchanged. An appeal with a missing
+or unknown `content_id` returns a clear error and does not change any status.
 
 **Why this target:**
 
-
+The appeal is the only thing standing between a wrongly accused writer and
+nothing at all, so it has to work every single time, not most of the time. The
+original decision is kept so there is a record of what the system said and why
+it was challenged. Rejecting unknown IDs with an error matters because a typo
+that silently "succeeds" would leave the writer thinking they'd appealed when
+nothing was recorded.
 
 ---
+
+## 5. Bad Input
+
+For each of these inputs to `/submit`, the service **never crashes**; it returns
+a 4xx error with a message that says what was wrong and how to fix it, and
+records the rejection in the log:
+
+- `text` is missing from the request
+- `text` is empty or only whitespace
+- `text` is longer than 20,000 characters
+- the body isn't valid JSON
+
+All 4 cases must pass (4 out of 4).
+
+**Why this target:**
+
+I want the system to be robust and user-friendly. A crash or a vague error
+leaves the writer stuck and makes the service look broken. A message like
+"`text` is empty — paste the writing you want checked" tells them exactly what
+to do. Logging the rejection means bad or abusive input leaves a trace instead
+of disappearing. The 20,000-character limit is well above any normal submission
+but stops someone from tying up the model with an enormous paste.
+
+---
+
 
 <!-- ─────────────────────────────────────────────────────────────────────────
      UNIT 8 — read this before you change anything above.
