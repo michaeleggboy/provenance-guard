@@ -175,6 +175,8 @@ def submit():
     Build it in three passes. Do not skip ahead — the ordering is how you tell
     a broken route from a broken signal.
 
+    {"text": "...", "creator_id": "..."} --> 
+
     **Milestone 3 — the route answers.**
       1. Return a hardcoded response. Confirm `curl` gets it back before you
          add any logic at all.
@@ -199,17 +201,49 @@ def submit():
     what should this do when `text` is missing, empty, or enormous? A crash on
     a malformed input is one of the most common real failures there is.
     """
-    payload = request.get_json(silent=True) or {}
+    import detector
 
-    # TODO: delete this and build the route.
+    payload = request.get_json(silent=True)
+    if not isinstance(payload, dict):
+        payload = {}
+    text = payload.get("text")
+    creator_id = payload.get("creator_id")
+
+    # Refuse bad input with a 400 and a log entry, not a crash.
+    if not isinstance(text, str) or not text.strip():
+        audit.log_rejection(creator_id=str(creator_id or "unknown"), reason="missing_text")
+        return jsonify({"error": "bad_request", "message": "'text' must be a non-empty string."}), 400
+    if not isinstance(creator_id, str) or not creator_id.strip():
+        audit.log_rejection(creator_id="unknown", reason="missing_creator_id")
+        return jsonify({"error": "bad_request", "message": "'creator_id' must be a non-empty string."}), 400
+
+    try:
+        model_score = detector.model_signal(text)
+    except ValueError as exc:
+        audit.log_rejection(creator_id=creator_id, reason="text_too_short")
+        return jsonify({"error": "bad_request", "message": str(exc)}), 400
+    except detector.DetectorUnavailable as exc:
+        return jsonify({"error": "detector_unavailable", "message": str(exc)}), 503
+
+    content_id = str(uuid.uuid4())
+    guess = "ai" if model_score >= 0.5 else "human"
+
+    audit.log_decision(
+        content_id=content_id,
+        creator_id=creator_id,
+        guess=guess,
+        model_score=model_score,
+        status="decided",
+    )
+
     return jsonify({
-        "error": "not_implemented",
-        "message": "POST /submit isn't built yet — see the TODO in app.py.",
-        "you_sent": {
-            "text_length": len(payload.get("text", "")),
-            "creator_id": payload.get("creator_id"),
-        },
-    }), 501
+        "content_id": content_id,
+        "guess": guess,
+        "confidence": None,     # placeholder until Milestone 4
+        "label": "pending",     # placeholder until Milestone 5
+        "model_score": model_score,
+        "style_score": None,    # Milestone 4
+    }), 200
 
 
 @app.post("/appeal")
