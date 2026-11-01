@@ -51,12 +51,22 @@ def combine_signals(model_score: float, style_score: float) -> float:
 
     The weights in config.py are placeholders. Change them, or ignore them and
     write a different rule.
+
+    Mine: a weighted average, except that when the signals are more than
+    DISAGREEMENT_GAP apart the result is clamped inside the unsure band, so a
+    split can never produce a confident label in either direction.
     """
-    # TODO: replace this
-    return (
+    total = config.WEIGHT_MODEL_SIGNAL + config.WEIGHT_STYLE_SIGNAL
+    combined = (
         config.WEIGHT_MODEL_SIGNAL * model_score
         + config.WEIGHT_STYLE_SIGNAL * style_score
-    )
+    ) / total
+
+    if abs(model_score - style_score) > config.DISAGREEMENT_GAP:
+        combined = min(max(combined, config.HUMAN_THRESHOLD + 0.01),
+                       config.AI_THRESHOLD - 0.01)
+
+    return round(combined, 4)
 
 
 def score_to_label(score: float) -> tuple[str, str]:

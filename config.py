@@ -57,6 +57,11 @@ DETECTOR_MAX_TOKENS = 400
 WEIGHT_MODEL_SIGNAL = 0.5
 WEIGHT_STYLE_SIGNAL = 0.5
 
+# When the two signals are further apart than this, they're treated as a split
+# and the combined score is held inside the unsure band — two methods
+# disagreeing is uncertainty, not a verdict.
+DISAGREEMENT_GAP = 0.30
+
 
 # ─── Thresholds (Milestone 5) ────────────────────────────────────────────────
 # Where one label becomes another. Scores run 0.0 (confidently human) to 1.0

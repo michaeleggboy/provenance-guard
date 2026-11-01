@@ -54,16 +54,24 @@
 ### Signal one — the model signal
 
 **What it measures:**
+How surprised the model is by this text. Lower means more predictable.
 
 **Why that might differ between human and AI writing:**
+AI are determinstic probabilty machines
+designed to output the most likely next word(s) based on context. Therefore, AI writing should be
+more predictable.
 
 **What it can't see:**
+Deliberate style choices that might lead to higher or lower predictablity.
 
 ### Signal two — the style signal
 
 **What it measures:**
+Punctuation density, sentence length variablity, and unique word usage rate.
 
 **Why that might differ between human and AI writing:**
+AI writing is generally deemed to be more standardized in sentence length and word usage. Also, AI
+tends to use more of certain punctuations specifically em dashes.
 
 **What it can't see:**
 
@@ -73,8 +81,32 @@
      signals disagree? -->
 
 **The rule:**
+Take a weighted average of the two signals. But if the two signals are more than
+`DISAGREEMENT_GAP` apart, the result is held inside the "unsure" band. When the two
+methods split, the service can't give a confident label either way. That leans
+toward fewer false accusations (a writer whose style reads human isn't called AI
+on the model signal alone). It also means AI text that games only one signal can't
+get a confident "human" either.
 
-**The numbers:**
+**The numbers:** (all in `config.py`)
+
+| Setting | Value |
+|---|---|
+| `WEIGHT_MODEL_SIGNAL` | 0.5 |
+| `WEIGHT_STYLE_SIGNAL` | 0.5 |
+| `DISAGREEMENT_GAP` | 0.30 (a gap of more than this counts as a split) |
+| Split → combined score clamped to | `HUMAN_THRESHOLD + 0.01` … `AI_THRESHOLD − 0.01` (currently 0.36 – 0.64) |
+
+Inside the style signal (`stylometry.py::STYLE_MEASURES`), each measure goes through a
+logistic around a midpoint, then a weighted mean:
+
+| Measure | Midpoint (scores 0.5) | Weight | Direction |
+|---|---|---|---|
+| sentence length spread (stdev / mean) | 0.35 | 0.5 | higher = more human |
+| punctuation density (non-terminal marks per word) | 0.08 | 0.3 | higher = more human |
+| type-token ratio (40-word moving average) | 0.88 | 0.2 | higher = more human |
+
+Fewer than two sentences → style signal returns 0.5 (nothing to measure).
 
 **Where it lives:** `scoring.py::combine_signals`
 
@@ -82,6 +114,36 @@
      somewhere else, say where. -->
 
 **A case where my two signals split, and what my rule does with it:**
+
+AI-written text about remote work that mixes very short sentences ("But it isn't perfect.",
+"Organizations that adapt will thrive.") with long, comma-heavy ones:
+
+| model_score | style_score | gap | combined |
+|---|---|---|---|
+| 0.693 (AI) | 0.176 (human) | 0.52 | 0.435 → unsure |
+
+The model signal still sees predictable word choices. The style signal is fooled by the
+uneven sentence lengths and extra commas, which is exactly its blind spot: it measures
+shape, not substance. With 0.5/0.5 weights the average already falls in the unsure band,
+so the clamp didn't change this result. The clamp matters when the average would leave
+the band despite a split (e.g. model 0.95, style 0.60 → average 0.775 = "AI"; with the
+rule → 0.64 = unsure), and it keeps that guarantee if I change the weights later.
+
+**Calibration — four deliberately chosen inputs (plus one more):**
+
+| Input | model | style | combined | Reading |
+|---|---|---|---|---|
+| Clearly AI (generic "furthermore… in conclusion…") | 0.862 | 0.674 | 0.768 | AI ✓ |
+| Clearly human (specific, personal, uneven) | 0.360 | 0.111 | 0.236 | human ✓ |
+| Formal human (committee/jurist prose) | 0.632 | 0.319 | 0.476 | unsure |
+| Lightly-edited AI (casual rewording of the AI text) | 0.608 | 0.469 | 0.538 | unsure |
+| Plain human ("I went to the store today…") | 0.876 | 0.768 | 0.822 | **AI ✗** |
+
+The surprise was the formal human text: the model signal put it at 0.63, leaning AI, not
+human as I expected. Style read it correctly (long varied sentences, semicolons), and the
+average pulled it back to unsure. The real failure is plain human writing. *Both* signals
+call it AI, so they agree and no combining rule can catch it. That's the false positive
+this service is most likely to produce, against the writers least able to argue back.
 
 
 
@@ -121,14 +183,29 @@
      two off the response, so leaving them out costs you next unit's
      diagnostics. -->
 
+*(Run on port 5050 with `PORT=5050 python app.py` — macOS AirPlay Receiver holds 5000.
+This is the Milestone 3 response: one signal, `confidence`/`label`/`style_score` still placeholders.)*
+
 ```bash
-$ curl -X POST http://127.0.0.1:5000/submit \
+$ curl -X POST http://127.0.0.1:5050/submit \
   -H "Content-Type: application/json" \
-  -d '{"text": "...", "creator_id": "..."}'
+  -d '{"text": "Artificial intelligence has revolutionized numerous industries by enabling more efficient processes and data-driven decision-making. Furthermore, it is important to note that these technologies offer significant benefits across a wide range of applications.", "creator_id": "michael"}'
 ```
 
 ```json
+{"confidence":null,"content_id":"0e86282b-ef15-4226-b98d-616646e40642","guess":"ai","label":"pending","model_score":0.8394,"style_score":null}
+```
 
+A malformed submission gets a 400 and a log entry instead of a crash:
+
+```bash
+$ curl -X POST http://127.0.0.1:5050/submit \
+  -H "Content-Type: application/json" \
+  -d '{"text": "", "creator_id": "michael"}'
+```
+
+```json
+{"error":"bad_request","message":"'text' must be a non-empty string."}
 ```
 
 **An appeal**
@@ -146,11 +223,11 @@ $ curl -X POST http://127.0.0.1:5000/appeal \
 **What the log shows afterwards**
 
 ```bash
-$ curl "http://127.0.0.1:5000/log?limit=3"
+$ curl "http://127.0.0.1:5050/log?limit=2"
 ```
 
 ```json
-
+{"count":2,"entries":[{"combined_score":null,"content_id":"0e86282b-ef15-4226-b98d-616646e40642","creator_id":"michael","guess":"ai","label":null,"model_score":0.8394,"status":"decided","style_score":null,"timestamp":"2026-11-01T17:53:23+00:00"},{"creator_id":"michael","event":"rejected","reason":"missing_text","status":"rejected","timestamp":"2026-11-01T17:53:23+00:00"}]}
 ```
 
 ---

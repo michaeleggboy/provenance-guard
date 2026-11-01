@@ -30,8 +30,11 @@ anything together:
     python stylometry.py "some text to look at"
 """
 
+import math
 import re
 import statistics
+
+TTR_WINDOW = 40   # words per window for the moving-average type-token ratio
 
 
 def sentences(text: str) -> list[str]:
@@ -63,9 +66,18 @@ def sentence_length_spread(text: str) -> float:
     Watch the edge case: a one-sentence submission has no spread at all, and
     `stdev` raises on fewer than two values. Decide what that should return
     before the attack set decides for you.
+
+    Mine: coefficient of variation (stdev / mean) of words per sentence.
+    0.0 = every sentence the same length; ~0.6+ is lumpy. **Higher = more
+    human.** Fewer than two sentences returns None — no evidence either way,
+    and style_signal treats it as neutral rather than as "perfectly even".
     """
-    # TODO: replace this
-    return 0.0
+    lengths = [len(words(s)) for s in sentences(text)]
+    lengths = [n for n in lengths if n > 0]
+    if len(lengths) < 2:
+        return None
+    mean = statistics.mean(lengths)
+    return round(statistics.stdev(lengths) / mean, 4)
 
 
 def type_token_ratio(text: str) -> float:
@@ -79,9 +91,22 @@ def type_token_ratio(text: str) -> float:
     longer, because common words repeat. Two texts of different lengths aren't
     directly comparable on it, and if your test inputs vary a lot in length,
     that alone can look like a signal.
+
+    Mine: a moving-average TTR (MATTR) — the plain ratio inside every
+    TTR_WINDOW-word window, averaged — so a 60-word and a 300-word text are on
+    the same footing. Shorter than one window falls back to the plain ratio.
+    **Higher = more human.** No words returns None.
     """
-    # TODO: replace this
-    return 0.0
+    tokens = words(text)
+    if not tokens:
+        return None
+    if len(tokens) <= TTR_WINDOW:
+        return round(len(set(tokens)) / len(tokens), 4)
+    ratios = [
+        len(set(tokens[i:i + TTR_WINDOW])) / TTR_WINDOW
+        for i in range(len(tokens) - TTR_WINDOW + 1)
+    ]
+    return round(statistics.mean(ratios), 4)
 
 
 def punctuation_density(text: str) -> float:
@@ -93,9 +118,16 @@ def punctuation_density(text: str) -> float:
         semicolons, dashes — is a real choice. Semicolons and em dashes are
         more interesting than full stops, because they vary more between
         writers.
+
+    Mine: non-terminal punctuation (, ; : — – - ( ) " ' ! ?) per word, so full
+    stops — which only track sentence count — don't count. Apostrophes inside
+    words (don't) aren't counted either. Direction is set in style_signal.
     """
-    # TODO: replace this
-    return 0.0
+    tokens = words(text)
+    if not tokens:
+        return None
+    marks = re.findall(r"[,;:—–()\"“”!?]|(?<!\w)'|'(?!\w)|\s-\s", text)
+    return round(len(marks) / len(tokens), 4)
 
 
 # ── Combining them ───────────────────────────────────────────────────────────
@@ -121,9 +153,42 @@ def style_signal(text: str) -> float:
     clearly human, plain conventional human writing, lightly-edited AI — before
     you trust it. Plain and ordinary, not formal: formal prose reads as *human*
     to signal one, and it is plain writing that gets accused.
+
+    Mine: every measure points "higher = more human", so each goes through a
+    flipped logistic onto 0–1 AI-ness — 0.5 at its midpoint, steepness picked
+    from the calibration texts — then a weighted mean.
+
+    Fewer than two sentences returns 0.5: one sentence has no shape to
+    measure, and letting the other two decide alone scored a single
+    comma-heavy sentence as ~0.03 "human" — a free pass for anyone who
+    writes everything as one sentence.
     """
-    # TODO: replace this
-    return 0.5
+    if sentence_length_spread(text) is None:
+        return 0.5
+
+    parts = []
+    for measure, midpoint, steepness, weight in STYLE_MEASURES.values():
+        value = measure(text)
+        if value is None:
+            continue
+        ai_ness = 1.0 / (1.0 + math.exp(steepness * (value - midpoint)))
+        parts.append((weight, ai_ness))
+
+    if not parts:
+        return 0.5
+    total = sum(w for w, _ in parts)
+    return round(sum(w * a for w, a in parts) / total, 4)
+
+
+# measure: (function, midpoint, steepness, weight). The midpoint is the raw
+# value that scores 0.5 — chosen between the clearly-AI and clearly-human
+# calibration texts. TTR barely separates them at these lengths, so it counts
+# least.
+STYLE_MEASURES = {
+    "sentence_length_spread": (sentence_length_spread, 0.35, 8.0, 0.5),
+    "punctuation_density": (punctuation_density, 0.08, 50.0, 0.3),
+    "type_token_ratio": (type_token_ratio, 0.88, 25.0, 0.2),
+}
 
 
 if __name__ == "__main__":
@@ -139,4 +204,3 @@ if __name__ == "__main__":
     print(f"type_token_ratio         {type_token_ratio(text)}")
     print(f"punctuation_density      {punctuation_density(text)}")
     print(f"style_signal             {style_signal(text)}   (higher = more likely AI)")
-    print("\nAll zeros? These are stubs — Milestone 4 is where you build them.")
